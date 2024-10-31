@@ -10,12 +10,15 @@ parser = argparse.ArgumentParser(description='XMTD - XMT daemon.')
 parser.add_argument('path', type=str, help='The path to the directory.')
 parser.add_argument('-v', '--verbose', action='count', default=0, help='Increase verbosity level (use -v, -vv, -vvv, etc.)')
 parser.add_argument('--logfile', type=str, help='Log file destination (default: $cwd/xmtd.log)', default='xmtd.log')
+parser.add_argument('--debug', action='store_true', help='Enable debug mode (equivalent to -vvvvv).')
 
 args = parser.parse_args()
+if args.debug: args.verbose = 5
 loglevel = max(logging.INFO - (args.verbose * 10), 10)
 
 
 logger_names = ['cronjob', 'telegram-io', 'xmtd']
+if args.verbose >= 5: logger_names = logging.root.manager.loggerDict.keys()
 for name in logger_names: logging.getLogger(name).setLevel('DEBUG')
 
 formatter = logging.Formatter('%(asctime)s - %(levelname)s [%(name)s]: %(message)s', datefmt='%Y-%b-%d %H:%M:%S')
@@ -32,7 +35,6 @@ for name in logger_names:
     logger = logging.getLogger(name)
     for h in [handler, fhandler]: logger.addHandler(h)
 
-runtime.logger.info('====================================')
 
 r = runtime.Runtime(args.path)
 r.boot()
@@ -44,5 +46,4 @@ try:
 except KeyboardInterrupt:
     runtime.logger.fatal('Received KeyboardInterrupt. Exiting...')
     r.stop()
-    runtime.logger.fatal('====================================')
     exit()
