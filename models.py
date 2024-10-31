@@ -16,6 +16,7 @@ from threading import Thread, Event
 from croniter import croniter
 import pytz
 tz = pytz.FixedOffset(3)
+now = lambda: tz.localize(datetime.now())
 
 import logging
 logger = logging.getLogger('cronjob')
@@ -49,15 +50,26 @@ class Cron:
     def __init__(self, name, cron_expr, func, *args, **kwargs):
         self.running = False
         self.cron_expr = cron_expr
-        self.croniter = croniter(self.cron_expr, tz.localize(datetime.now()))
+        self.init_time = now()
+        self.croniter = croniter(self.cron_expr, self.init_time)
 
         self.name = name
         self.func = func
         self.args = args
         self.kwargs = kwargs
 
-    def time_to_sleep(self):  
-        delta = (self.croniter.get_next(datetime)-tz.localize(datetime.now())).total_seconds()
+        self.random = 'R' in cron_expr
+
+    def pre_delta_hook(self):
+        if self.random:
+            self.croniter = croniter(self.cron_expr, now())
+
+    def time_to_sleep(self, return_delta = True):
+        self.pre_delta_hook()
+        next_instant = self.croniter.get_next(datetime)
+        if not return_delta: return next_instant
+        
+        delta = (next_instant-tz.localize(datetime.now())).total_seconds()
         self._last_delta = delta
         if delta < 0:
             return self.time_to_sleep() # will get accustomed.
