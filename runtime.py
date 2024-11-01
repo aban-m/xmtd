@@ -5,10 +5,10 @@ import time
 import sys
 sys.path.insert(0, '../xmtlib')
 
-from models import Cron, Profile, logger as cron_logger
+from models import Cron, Profile
 from xmt.recipes.dynamic.core import DynamicRecipe
+from xmt.recipes.storage import FileStorage
 
-logger = logging.getLogger('xmtd')
 
 def shower(profile, recipe):
     profile.show(recipe.execute()[1])
@@ -16,35 +16,55 @@ def shower(profile, recipe):
 def nop(*args, **kwargs): pass
 
 class Runtime:
-    def __init__(self, path, lifeline_cron = '* * * * *'):
-        logger.info(f'Initializing XMTD. Working directory: {path}')
+    def __init__(self, path, lifeline_cron = '* * * * *', name=''):
+        self.logger = logging.getLogger('xmtd' + (':'+name) if name else '')
+        self.logger.info(f'Initializing XMTD. Working directory: {path}')
+        
         self.path = path
         self.profiles = {}
+        self.recipes = {}
         self.cronjobs = {}
-        self.cronjobs[0] = Cron('SYSTEM', lifeline_cron, nop)
+        self.env = FileStorage(os.path.join(path, 'recipes'))
+        self.cronjobs[0] = [Cron('SYSTEM', lifeline_cron, nop)]
+        
         for profile_path in os.listdir(os.path.join(path, 'profiles')):
             profile_path = os.path.join(path, 'profiles', profile_path)
-            logger.info(f'Processing profile: {profile_path}')
             profile = Profile.from_file(profile_path)
-            self.cronjobs[profile.name] = []
-            self.profiles[profile.name] = profile
+            name = profile.name
+            self.profiles[name] = profile
+            if name in self.cronjobs:
+                self.logger.critical('Found name conflict.')
+                raise ValueError(f'{name} was duplicated.')
             
-            for recipe_name, cron_exprs in profile.recipes.items():
-                logger.info(f'Processing recipe: {recipe_name}.')
-                if isinstance(cron_exprs, str): cron_exprs = [cron_exprs]
-                actual_recipe = DynamicRecipe(profile.env.load_recipe(recipe_name), profile.env)
-                do = lambda: profile.show(actual_recipe.execute()[1])
+            self.logger.debug(f'Loaded profile {name} from {profile_path}.')
 
-                for i, cron_expr in enumerate(cron_exprs):
-                    self.cronjobs[profile.name].append(Cron(f'{profile.name}-{recipe_name}-#{i}',
-                                                            cron_expr, shower, profile, actual_recipe))
-                    logger.debug(f'Cronjob for {recipe_name} initiated -- pattern {cron_expr}')
+            self.cronjobs[name] = []
+
                 
+            for pack in profile.recipes:
+                rname, rdec = list(pack.items())[0]
+                if not rname in self.recipes:
+                    spec = self.env.load_recipe(rname)
+                    self.recipes[rname] = DynamicRecipe(spec, self.env)
+                    self.logger.debug(f'Loaded new recipe: {rname}.')
+                for i, cron_expr in enumerate(rdec['cron']):
+                    cron = Cron(f'{name}:{rname}'+('*'*i),
+                                 cron_expr,
+                                 self.write,
+                                 name, rname, rdec)
+                    self.cronjobs[name].append(cron)
+                    self.logger.debug(f'Defined cronjob for {name}\'s {rname}. Pattern: {cron_expr}.')
+
+    def write(self, profile_name, recipe_name, iparams):
+        recipe = self.recipes[recipe_name]
+        _, text = recipe.execute(poststate = iparams['with'])
+        self.profiles[profile_name].write(iparams['where'], text, iparams['recon'])
+
+             
     def boot(self):
-        logger.info(f'Starting XMTD booting sequence.')
-        self.cronjobs[0].start()
+        self.logger.info(f'Starting XMTD booting sequence.')
         for _, rlist in self.cronjobs.items():
-            logger.debug(f'Processing cronjobs for {_}.')
+            self.logger.debug(f'Processing cronjobs for {_}.')
             for i, cronjob in enumerate(rlist):
                 cronjob.start()
 
@@ -53,10 +73,10 @@ class Runtime:
             cronjob.stop()
 
     def stop(self, who=None):
-        logger.debug(f'Stopping all cronjobs.')
+        self.logger.debug(f'Stopping all cronjobs.')
         if who is None:
             for name in self.cronjobs:
-                logger.info(f'Stopping cronjobs for {name if name else <SYSTEM>}.')
+                self.logger.info(f'Stopping cronjobs for {name if name else "<SYSTEM>"}.')
                 self._stop(name)
         else: self._stop(who)
 

@@ -18,6 +18,7 @@ from threading import Thread, Event
 from croniter import croniter
 import pytz
 tz = pytz.FixedOffset(2)        # HACK!
+
 now = lambda: tz.localize(datetime.now())
 
 import logging
@@ -28,43 +29,55 @@ class Profile:
     @classmethod
     def from_file(cls, path):
         spec, cwd = load_yaml(open(path)), str(pathlib.Path(path).parent.absolute())
-        return cls(spec, cwd)
+        return cls(spec)
     
-    def __init__(self, spec: dict, cwd = '.'):
-        if cwd is None: cwd = os.getcwd()
-        self.cwd = pathlib.Path(cwd).absolute()
+    def __init__(self, spec: dict):
         self.spec = spec
         self.parse_spec()
 
     def parse_spec(self):
+        self.name = self.spec['name']
+        self.writer = None
+        self.reader = None
+        
         self.interfaces = {}
         for interface, config in self.spec['io']['interfaces'].items():
             self.interfaces[interface] = comm.bootstrap(interface, config, self.name)
             
-        self.interfaces[interface] = comm.bootstrap(interface, config)
+        self.interfaces[interface] = comm.bootstrap(interface, config, self.name)
 
-        if isinstance(self.spec['io']['write'], list):
-            self.writers = [self.interfaces[interface] for interface in self.spec['io']['write']]
-        else: self.writers = [self.interfaces[self.spec['io']['write']]]
-        assert all(interface.is_writer for interface in self.writers)
+        if not isinstance(self.spec['io']['write'], list):
+            self.spec['io']['write'] = [self.spec['io']['write']]
+        self.writers = [self.interfaces[interface] for interface in self.spec['io']['write']]
+        assert all(interface.is_writer for interface in self.writers), 'Must be all writers.'
         
         self.reader = self.interfaces[self.spec['io']['read']]
-        assert self.reader.is_reader
+        assert self.reader.is_reader, 'Must be a reader.'
 
-        self.gconf = self.spec['config']
         self.recipes = self.spec['recipes']
 
-        for rname, rdec in self.recipes:
+        for i, pack in enumerate(self.recipes):
+            rname, rdec = list(pack.items())[0]
             if isinstance(rdec, str) or isinstance(rdec, list):
-                self.recipes[rname] = {
-                    'cron': rname
+                rdec = {
+                    'cron': rdec
                 }
             if not 'with' in rdec: rdec['with'] = {}
             if not 'recon' in rdec: rdec['recon'] = {}
+            if not isinstance(rdec['cron'], list): rdec['cron'] = [rdec['cron']]
+            if not 'where' in rdec:
+                rdec['where'] = self.spec['io']['write']
+            else:
+                if not isinstance(rdec['where'], list): rdec['where'] = [rdec['where']]
+            self.recipes[i] = {rname: rdec}
 
-        self.gconf = self.spec['config']
-        self.env = FileStorage(self.gconf['recipes-path'])
-        
+    def write(self, where, text, override):
+        for writer in where:
+            self.interfaces[writer].write(text, override)
+            
+    def read(self, prompt, override):
+        return self.reader.read(prompt, override)
+    
         
 class Cron:
     def __init__(self, name, cron_expr, func, *args, **kwargs):
