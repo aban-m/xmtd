@@ -13,12 +13,15 @@ logger = logging.getLogger('xmtd')
 def shower(profile, recipe):
     profile.show(recipe.execute()[1])
 
+def nop(*args, **kwargs): pass
+
 class Runtime:
-    def __init__(self, path):
+    def __init__(self, path, lifeline_cron = '* * * * *'):
         logger.info(f'Initializing XMTD. Working directory: {path}')
         self.path = path
         self.profiles = {}
         self.cronjobs = {}
+        self.cronjobs[0] = Cron('SYSTEM', lifeline_cron, nop)
         for profile_path in os.listdir(os.path.join(path, 'profiles')):
             profile_path = os.path.join(path, 'profiles', profile_path)
             logger.info(f'Processing profile: {profile_path}')
@@ -39,6 +42,7 @@ class Runtime:
                 
     def boot(self):
         logger.info(f'Starting XMTD booting sequence.')
+        self.cronjobs[0].start()
         for _, rlist in self.cronjobs.items():
             logger.debug(f'Processing cronjobs for {_}.')
             for i, cronjob in enumerate(rlist):
@@ -52,7 +56,7 @@ class Runtime:
         logger.debug(f'Stopping all cronjobs.')
         if who is None:
             for name in self.cronjobs:
-                logger.info(f'Stopping cronjobs for {name}.')
+                logger.info(f'Stopping cronjobs for {name if name else <SYSTEM>}.')
                 self._stop(name)
         else: self._stop(who)
 

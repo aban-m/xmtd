@@ -5,7 +5,9 @@ import sys
 sys.path.insert(0, '../xmtlib')
 
 from xmt.recipes.storage import FileStorage
-from comm.telegram import Bot
+try: from . import comm
+except: import comm
+
 from yaml import safe_load as load_yaml
 
 import time
@@ -15,7 +17,7 @@ from threading import Thread, Event
 
 from croniter import croniter
 import pytz
-tz = pytz.FixedOffset(3)
+tz = pytz.FixedOffset(2)        # HACK!
 now = lambda: tz.localize(datetime.now())
 
 import logging
@@ -31,21 +33,39 @@ class Profile:
     def __init__(self, spec: dict, cwd = '.'):
         if cwd is None: cwd = os.getcwd()
         self.cwd = pathlib.Path(cwd).absolute()
-        self.io = spec['io']
-        self.recipes = spec['recipes']
-        self.recipe_names = tuple(self.recipes.keys())
-        self.name = spec['name']
+        self.spec = spec
+        self.parse_spec()
+
+    def parse_spec(self):
+        self.interfaces = {}
+        for interface, config in self.spec['io']['interfaces'].items():
+            self.interfaces[interface] = comm.bootstrap(interface, config, self.name)
+            
+        self.interfaces[interface] = comm.bootstrap(interface, config)
+
+        if isinstance(self.spec['io']['write'], list):
+            self.writers = [self.interfaces[interface] for interface in self.spec['io']['write']]
+        else: self.writers = [self.interfaces[self.spec['io']['write']]]
+        assert all(interface.is_writer for interface in self.writers)
         
-        if 'path' in spec or not 'recipes' in spec['path']:
-            spec['path'] = {
-                'recipes': os.path.join(self.cwd, '../recipes')
-            }
+        self.reader = self.interfaces[self.spec['io']['read']]
+        assert self.reader.is_reader
 
-        self.env = FileStorage(spec['path']['recipes'])
+        self.gconf = self.spec['config']
+        self.recipes = self.spec['recipes']
 
-        self.bot = Bot(self.io['telegram'])
-        self.show = self.bot.broadcast
+        for rname, rdec in self.recipes:
+            if isinstance(rdec, str) or isinstance(rdec, list):
+                self.recipes[rname] = {
+                    'cron': rname
+                }
+            if not 'with' in rdec: rdec['with'] = {}
+            if not 'recon' in rdec: rdec['recon'] = {}
 
+        self.gconf = self.spec['config']
+        self.env = FileStorage(self.gconf['recipes-path'])
+        
+        
 class Cron:
     def __init__(self, name, cron_expr, func, *args, **kwargs):
         self.running = False
